@@ -1,4 +1,9 @@
-# Sancho
+# Bonsai 🌱 (grown from Sancho)
+
+Bonsai is a small coding agent with a living bonsai-plant persona: tend your code,
+one careful change at a time. It grows from the Sancho example below, with a choice
+of Claude or OpenAI models. The historical chapters, screenshots, and git tags
+still tell Sancho's original story.
 
 <p align="center">
   <img src="images/sancho.png" alt="Sancho Panza on his donkey, in color, next to a grayed-out Don Quixote" width="480">
@@ -8,7 +13,7 @@
   The pictures at the top of the chapters were made with Gemini, from this one.</sub>
 </p>
 
-A coding agent in under 400 lines of Python, built from scratch one small step at a time. After about 200 lines, it helps modify and improve itself so you don't really have to write code anymore. 
+A compact coding agent, built from scratch one small step at a time. After about 200 lines, it helps modify and improve itself so you don't really have to write code anymore.
 
 # Inspiration
 Sancho follows Thorsten Ball's [How to Build an Agent](https://ampcode.com/how-to-build-an-agent), which builds the same
@@ -41,7 +46,9 @@ git checkout step1
 
 ## Setup
 
-Sancho works with the Anthropic API. You need an Anthropic API key to run this example. 
+Bonsai defaults to **Claude** through Anthropic's Messages API. Alternatively,
+choose **OpenAI**, using the Responses API with local function tools (not hosted
+tools or the Codex CLI). Only the selected provider's API key is needed.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -49,6 +56,53 @@ pip install -r requirements.txt
 export ANTHROPIC_API_KEY=...
 python main.py
 ```
+
+For OpenAI, use an OpenAI API key instead:
+
+```bash
+export OPENAI_API_KEY=...
+python main.py --provider openai
+python main.py --provider openai --model gpt-5.1-codex
+```
+
+Defaults are `claude-sonnet-5-5` for Claude and `gpt-5.1-codex` for OpenAI.
+Model availability depends on your API account; `--model` accepts another model
+supported by the selected API with function calling.
+
+```bash
+python main.py --provider claude --model claude-sonnet-5-5
+python main.py --provider openai --model gpt-5.1-codex --yolo
+/path/to/sancho/bonsai --provider openai
+```
+
+The startup banner shows the selected provider and model. The new `bonsai`
+launcher and the original `sancho` command both use the repository's `.venv`
+and accept the same flags. They work from any directory, including through a
+symlink on your `PATH`. There is no automatic fallback between providers.
+
+Programs still require confirmation unless `--yolo` is set. Timeouts, output
+truncation, and file-edit behavior are unchanged. `--yolo` retains the warning
+and prompt instruction to ask before irreversible actions; it is not a sandbox.
+
+### Current architecture and validation
+
+`main.py` owns the terminal and tool loop; `llm.py` selects the provider and
+shares the Bonsai prompt. `claude.py` and `openai_provider.py` own SDK calls and
+native histories, preserving thinking/reasoning items. OpenAI uses `call_id`
+to match function outputs and non-strict schemas to preserve optional arguments.
+`tools.py` executes the same four tools and returns provider-neutral results;
+each adapter formats errors and results for its API. Invalid OpenAI arguments
+become tool errors rather than stopping the process. API failures are reported
+in the terminal without automatically replaying tools or switching providers.
+
+Run the offline, mocked tests (no API keys or paid calls required):
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The chapters below describe the original Claude-only implementation at their
+tags; their code examples are historical, not the current provider interface.
 
 ## Prerequisite: A few facts about the Anthropic API
 

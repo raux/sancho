@@ -1,0 +1,4 @@
+#!/bin/sh
+# The plant's new name; the original launcher remains compatible.
+repo="$(dirname "$(readlink -f "$0")")"
+exec "$repo/sancho" "$@"

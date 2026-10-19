@@ -1,49 +1,55 @@
 """A thin shim over the Anthropic SDK, with names we find clearer."""
 
-import os
-
 import anthropic
+
+from llm import ResponseError, system_prompt
 
 MODEL = "claude-sonnet-5-5"
 
-client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
 
-# Raised when Claude can't be reached: no network, overloaded, rate-limited, ...
-# (the SDK has already retried twice by then).
-Unreachable = anthropic.APIError
+class Provider:
+    Unreachable = anthropic.APIError
+    ConfigurationError = anthropic.AnthropicError
 
+    def __init__(self, model=None):
+        self.model = model or MODEL
+        self.client = anthropic.Anthropic()
 
-OWN_CODE_FOLDER = os.path.dirname(os.path.abspath(__file__))
+    def get_next_answer(self, conversation, tools, yolo=False):
+        try:
+            return self.client.messages.create(
+                model=self.model,
+                max_tokens=16000,
+                system=system_prompt(yolo),
+                messages=conversation,
+                tools=tools,
+            )
+        except TypeError as e:
+            # Some SDK versions defer missing-credential validation to the request.
+            raise ResponseError(str(e)) from e
 
-SYSTEM_PROMPT = f"""\
-You are Sancho, a small coding agent running in a terminal.
-You have four tools: read_file, list_folder, edit_file and run_program.
-You work in {os.getcwd()}, the folder the user started you in.
-Your own code is in {OWN_CODE_FOLDER}, so you can read it to learn how you work.
-If you change your own code, the changes take effect only after the user restarts you.
-Keep your answers short: they are shown in a terminal."""
+    def record_answer(self, conversation, message):
+        # Keep thinking blocks unchanged alongside text and tool calls.
+        conversation.append({"role": "assistant", "content": message.content})
 
-YOLO_PROMPT = """
+    def text_of(self, message):
+        return "".join(block.text for block in message.content if block.type == "text")
 
-Permissions are off: your programs run without the user confirming. Before anything that can't be undone, ask the user in your reply instead of running it: deleting or overwriting files, and anything that reaches beyond this computer, like git push or publishing."""
+    def tool_calls_of(self, message):
+        if message.stop_reason != "tool_use":
+            return []
+        return [block for block in message.content if block.type == "tool_use"]
 
-
-def get_next_answer(conversation, tools, yolo=False):
-    """Send the whole conversation and the tools to Claude, and return its reply."""
-    return client.messages.create(
-        model=MODEL,
-        max_tokens=16000,
-        system=SYSTEM_PROMPT + (YOLO_PROMPT if yolo else ""),
-        messages=conversation,
-        tools=tools,
-    )
-
-
-def text_of(message):
-    """The text of Claude's reply, without tool calls or thinking."""
-    return "".join(block.text for block in message.content if block.type == "text")
-
-
-def tool_calls_of(message):
-    """The tools Claude asks us to run in this reply."""
-    return [block for block in message.content if block.type == "tool_use"]
+    def add_results(self, conversation, results):
+        conversation.append({
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": result["id"],
+                    "content": result["content"],
+                    **({"is_error": True} if result.get("is_error") else {}),
+                }
+                for result in results
+            ],
+        })

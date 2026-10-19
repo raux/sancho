@@ -3,7 +3,7 @@ import shlex
 import subprocess
 
 DEFAULT_TIMEOUT = 30  # seconds
-MAX_OUTPUT = 10_000  # characters sent back to Claude
+MAX_OUTPUT = 10_000  # characters sent back to the model
 
 READ_FILE = {
     "name": "read_file",
@@ -158,7 +158,7 @@ def run_program(program, args=None, timeout_seconds=DEFAULT_TIMEOUT):
     try:
         completed = subprocess.run(
             command,
-            stdin=subprocess.DEVNULL,  # a program that waits for input must not hang Sancho
+            stdin=subprocess.DEVNULL,  # a program that waits for input must not hang Bonsai
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -215,22 +215,22 @@ def run(tool_calls):
     for call in tool_calls:
         try:
             print(f"\033[90m🔧 {call.name}({call.input})\033[0m")
+            if getattr(call, "error", ""):
+                raise ValueError(call.error)
             function = FUNCTIONS[call.name]
             if call.name in NEEDS_CONFIRMATION:
                 confirm(call)
             result = function(**call.input)
             results.append(
                 {
-                    "type": "tool_result",
-                    "tool_use_id": call.id,
+                    "id": call.id,
                     "content": result,
                 }
             )
         except Exception as e:
             results.append(
                 {
-                    "type": "tool_result",
-                    "tool_use_id": call.id,
+                    "id": call.id,
                     "content": str(e),
                     "is_error": True,
                 }

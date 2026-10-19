@@ -1,47 +1,58 @@
-"""Sancho: a basic chat agent, inspired by Thorsten Ball's "How to Build an Agent"."""
+"""Bonsai: a small coding agent grown from the Sancho example."""
 
+import argparse
 import readline  # importing it is enough: input() gets line editing and history
-import sys
 
 from rich.console import Console
 from rich.markdown import Markdown
 
-import claude
+import llm
 import tools
 
 console = Console()
 
 
-def agent_loop(conversation):
-    """Keep asking Claude, and running the tools it asks for, until it's done."""
+def agent_loop(conversation, provider):
+    """Keep asking the model and running its tools until the turn is done."""
     while True:
-        message = claude.get_next_answer(conversation, tools.DEFINITIONS, yolo=tools.yolo)
+        message = provider.get_next_answer(conversation, tools.DEFINITIONS, yolo=tools.yolo)
+        provider.record_answer(conversation, message)
 
-        # Every reply goes into the conversation, tool calls included: the API
-        # matches each tool_result to a tool_use in the previous assistant message,
-        # and wants the reply's thinking blocks sent back unchanged.
-        conversation.append({"role": "assistant", "content": message.content})
-
-        text = claude.text_of(message)
+        text = provider.text_of(message)
         if text:
-            console.print("Sancho:", Markdown(text))
+            console.print("Bonsai:", Markdown(text))
 
-        if message.stop_reason != "tool_use":
+        tool_calls = provider.tool_calls_of(message)
+        if not tool_calls:
             return
 
-        tool_calls = claude.tool_calls_of(message)
         results = tools.run(tool_calls)
-        conversation.append({"role": "user", "content": results})
+        provider.add_results(conversation, results)
 
 
-def main():
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Bonsai, a small coding agent 🌱")
+    parser.add_argument("--provider", choices=("claude", "openai"), default="claude")
+    parser.add_argument("--model", help="model override for the selected provider")
+    parser.add_argument("--yolo", action="store_true", help="run programs without confirmation")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    try:
+        provider = llm.create_provider(args.provider, args.model)
+    except (ValueError, RuntimeError, ImportError) as e:
+        print(f"Bonsai couldn't initialize {args.provider}: {e}")
+        return
     conversation = []
-    if "--yolo" in sys.argv:
-        tools.yolo = True
+    tools.yolo = args.yolo
+    if tools.yolo:
         print(
-            "\033[33mWarning: --yolo is on. Sancho will run programs without asking.\033[0m"
+            "\033[33mWarning: --yolo is on. Bonsai will run programs without asking.\033[0m"
         )
-    print("Sancho: ¡A sus órdenes, mi señor! 🫡  (adiós or Ctrl-D to quit)")
+    print(f"Bonsai 🌱  Provider: {args.provider}  Model: {provider.model}")
+    print("Let's grow some code. (adiós or Ctrl-D to quit)")
 
     try:
         while True:
@@ -55,10 +66,10 @@ def main():
 
             conversation.append({"role": "user", "content": user_input})
             try:
-                agent_loop(conversation)
-            except claude.Unreachable as e:
+                agent_loop(conversation, provider)
+            except (provider.Unreachable, llm.ResponseError) as e:
                 print(
-                    f"Sancho can't reach Claude right now: {e} Try again in a moment."
+                    f"Bonsai couldn't complete the {args.provider} turn: {e} Try again in a moment."
                 )
     except (EOFError, KeyboardInterrupt):
         pass
