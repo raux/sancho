@@ -2,8 +2,8 @@
 
 Bonsai is a small coding agent with a living bonsai-plant persona: tend your code,
 one careful change at a time. It grows from the Sancho example below, with a choice
-of Claude or OpenAI models. The historical chapters, screenshots, and git tags
-still tell Sancho's original story.
+of Claude, OpenAI, or local LM Studio models. The historical chapters, screenshots,
+and git tags still tell Sancho's original story.
 
 <p align="center">
   <img src="images/sancho.png" alt="Sancho Panza on his donkey, in color, next to a grayed-out Don Quixote" width="480">
@@ -47,8 +47,10 @@ git checkout step1
 ## Setup
 
 Bonsai defaults to **Claude** through Anthropic's Messages API. Alternatively,
-choose **OpenAI**, using the Responses API with local function tools (not hosted
-tools or the Codex CLI). Only the selected provider's API key is needed.
+choose **OpenAI** through the Responses API, or **LM Studio** through its local
+OpenAI-compatible server. The LM Studio provider uses the same local tools and
+does not require an OpenAI API key. Claude and OpenAI still use their respective
+API keys; LM Studio uses its local server.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -65,13 +67,26 @@ python main.py --provider openai
 python main.py --provider openai --model gpt-5.1-codex
 ```
 
-Defaults are `claude-sonnet-5-5` for Claude and `gpt-5.1-codex` for OpenAI.
-Model availability depends on your API account; `--model` accepts another model
-supported by the selected API with function calling.
+For LM Studio, start its local server and load a model, then run:
+
+```bash
+python main.py --provider lmstudio
+python main.py --provider lmstudio --model <loaded-model>
+```
+
+The LM Studio server defaults to `http://localhost:1234/v1`; set
+`LM_STUDIO_BASE_URL` to use another address. The default model name is
+`local-model`, which LM Studio uses for its currently loaded model. Set
+`LM_STUDIO_API_KEY` only if the local server requires an API key.
+
+Defaults are `claude-sonnet-5-5` for Claude, `gpt-5.1-codex` for OpenAI, and
+`local-model` for LM Studio. Model availability depends on the selected API or
+the model loaded in LM Studio.
 
 ```bash
 python main.py --provider claude --model claude-sonnet-5-5
 python main.py --provider openai --model gpt-5.1-codex --yolo
+python main.py --provider lmstudio --model <loaded-model>
 /path/to/sancho/bonsai --provider openai
 ```
 
@@ -87,11 +102,12 @@ and prompt instruction to ask before irreversible actions; it is not a sandbox.
 ### Current architecture and validation
 
 `main.py` owns the terminal and tool loop; `llm.py` selects the provider and
-shares the Bonsai prompt. `claude.py` and `openai_provider.py` own SDK calls and
-native histories, preserving thinking/reasoning items. OpenAI uses `call_id`
-to match function outputs and non-strict schemas to preserve optional arguments.
+shares the Bonsai prompt. Provider modules own SDK calls and native histories.
+The OpenAI Responses API preserves reasoning items and correlates tool outputs
+with `call_id`; LM Studio uses OpenAI-compatible Chat Completions and tool-call
+messages. Both use non-strict schemas to preserve optional arguments.
 `tools.py` executes the same four tools and returns provider-neutral results;
-each adapter formats errors and results for its API. Invalid OpenAI arguments
+each adapter formats errors and results for its API. Invalid tool arguments
 become tool errors rather than stopping the process. API failures are reported
 in the terminal without automatically replaying tools or switching providers.
 

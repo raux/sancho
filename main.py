@@ -32,7 +32,9 @@ def agent_loop(conversation, provider):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Bonsai, a small coding agent 🌱")
-    parser.add_argument("--provider", choices=("claude", "openai"), default="claude")
+    parser.add_argument(
+        "--provider", choices=("claude", "openai", "lmstudio"), default="claude"
+    )
     parser.add_argument("--model", help="model override for the selected provider")
     parser.add_argument("--yolo", action="store_true", help="run programs without confirmation")
     return parser.parse_args(argv)

@@ -38,6 +38,8 @@ def create_provider(name="claude", model=None):
         from claude import Provider
     elif name == "openai":
         from openai_provider import Provider
+    elif name == "lmstudio":
+        from lmstudio_provider import Provider
     else:
         raise ValueError(f"Unknown provider: {name}")
     try:

@@ -12,9 +12,31 @@ from openai.types.responses import ResponseFunctionToolCall, ResponseReasoningIt
 
 import claude
 import llm
+import lmstudio_provider
 import main
 import openai_provider
 import tools
+
+
+def chat_message(content=None, tool_calls=None):
+    message = SimpleNamespace(
+        role="assistant",
+        content=content,
+        tool_calls=tool_calls,
+        model_dump=lambda exclude_none=True: {
+            "role": "assistant",
+            **({"content": content} if content is not None else {}),
+            **({"tool_calls": tool_calls} if tool_calls else {}),
+        },
+    )
+    return message
+
+
+def chat_tool_call(call_id="call_1", name="list_folder", arguments="{}"):
+    return SimpleNamespace(
+        id=call_id,
+        function=SimpleNamespace(name=name, arguments=arguments),
+    )
 
 
 def openai_reply(*items, status="completed"):
@@ -41,9 +63,11 @@ class ProviderTests(unittest.TestCase):
         self.addCleanup(self.yolo.stop)
 
     def provider(self, name, model=None):
-        module, client_name = (
-            (anthropic, "Anthropic") if name == "claude" else (openai, "OpenAI")
-        )
+        module, client_name = {
+            "claude": (anthropic, "Anthropic"),
+            "openai": (openai, "OpenAI"),
+            "lmstudio": (openai, "OpenAI"),
+        }[name]
         with patch.object(module, client_name):
             return llm.create_provider(name, model)
 
@@ -54,11 +78,17 @@ class ProviderTests(unittest.TestCase):
         self.assertFalse(args.yolo)
         args = main.parse_args(["--provider", "openai", "--model", "coding-model", "--yolo"])
         self.assertEqual((args.provider, args.model, args.yolo), ("openai", "coding-model", True))
+        args = main.parse_args(["--provider", "lmstudio", "--model", "local-coding-model"])
+        self.assertEqual((args.provider, args.model), ("lmstudio", "local-coding-model"))
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             main.parse_args(["--provider", "other"])
 
     def test_factory_and_models(self):
-        for name, module in (("claude", claude), ("openai", openai_provider)):
+        for name, module in (
+            ("claude", claude),
+            ("openai", openai_provider),
+            ("lmstudio", lmstudio_provider),
+        ):
             with self.subTest(provider=name):
                 self.assertIsInstance(self.provider(name), module.Provider)
                 self.assertEqual(self.provider(name).model, module.MODEL)
@@ -71,6 +101,11 @@ class ProviderTests(unittest.TestCase):
             with self.subTest(provider=name), patch.dict(os.environ, {key: "test-placeholder"}, clear=True):
                 provider = llm.create_provider(name)
                 provider.client.close()
+        with patch.dict(os.environ, {}, clear=True), patch("openai.OpenAI") as client:
+            llm.create_provider("lmstudio")
+            client.assert_called_once_with(
+                base_url=lmstudio_provider.BASE_URL, api_key="lm-studio"
+            )
 
     def test_missing_keys_are_reported_without_traceback(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -145,6 +180,70 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual(native["parameters"], definition["input_schema"])
             self.assertFalse(native["strict"])
 
+    def test_lmstudio_chat_completions_tool_round_trip(self):
+        provider = self.provider("lmstudio", "local-coding-model")
+        call_one = chat_tool_call()
+        call_two = chat_tool_call("call_2", "list_folder", '{"path":"src"}')
+        replies = [
+            SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=chat_message("Looking.", [call_one, call_two]),
+                finish_reason="tool_calls",
+            )]
+            ),
+            SimpleNamespace(choices=[SimpleNamespace(
+            message=chat_message("Growing nicely."), finish_reason="stop",
+            )]),
+        ]
+        provider.client.chat.completions.create.side_effect = replies
+        conversation = [{"role": "user", "content": "look around"}]
+        function = Mock(side_effect=["files", "source"])
+        with patch.dict(tools.FUNCTIONS, {"list_folder": function}):
+            main.agent_loop(conversation, provider)
+
+        function.assert_any_call()
+        function.assert_any_call(path="src")
+        self.assertEqual(len(function.call_args_list), 2)
+        self.assertEqual(conversation[1]["tool_calls"], [call_one, call_two])
+        self.assertEqual(conversation[2:], [
+            {"role": "tool", "tool_call_id": "call_1", "content": "files"},
+            {"role": "tool", "tool_call_id": "call_2", "content": "source"},
+            {"role": "assistant", "content": "Growing nicely."},
+        ])
+        requests = provider.client.chat.completions.create.call_args_list
+        first_request = requests[0].kwargs
+        self.assertEqual(first_request["model"], "local-coding-model")
+        self.assertEqual(first_request["messages"][0]["role"], "system")
+        self.assertIn("Bonsai", first_request["messages"][0]["content"])
+        self.assertEqual(first_request["messages"][1], conversation[0])
+        self.assertEqual(first_request["tool_choice"], "auto")
+        self.assertEqual(first_request["tools"][0]["function"]["parameters"],
+                     tools.DEFINITIONS[0]["input_schema"])
+        self.assertEqual(requests[1].kwargs["messages"][-3]["role"], "assistant")
+
+    def test_lmstudio_invalid_arguments_and_incomplete_turn(self):
+        provider = self.provider("lmstudio")
+        response = SimpleNamespace(choices=[SimpleNamespace(
+            message=chat_message(tool_calls=[
+            chat_tool_call(arguments="[]"),
+            ]),
+            finish_reason="tool_calls",
+        )])
+        calls = provider.tool_calls_of(response)
+        self.assertEqual(calls[0].error, "Invalid tool arguments: tool arguments must be a JSON object")
+
+        for finish_reason in ("length", "content_filter"):
+            with self.subTest(finish_reason=finish_reason):
+                provider.client.chat.completions.create.return_value = SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=chat_message(), finish_reason=finish_reason
+                        )
+                    ]
+                )
+                with self.assertRaises(llm.ResponseError):
+                    main.agent_loop([], provider)
+
     def test_invalid_arguments_and_unknown_tools_return_errors(self):
         provider = self.provider("openai")
         for arguments in ("{", "[]", "null", '"text"', "1"):
@@ -171,7 +270,7 @@ class ProviderTests(unittest.TestCase):
                 run.assert_not_called()
 
     def test_api_failure_is_reported_and_executed_tools_are_not_replayed(self):
-        for name in ("claude", "openai"):
+        for name in ("claude", "openai", "lmstudio"):
             with self.subTest(provider=name):
                 provider = self.provider(name)
                 provider.Unreachable = llm.ResponseError
@@ -179,12 +278,25 @@ class ProviderTests(unittest.TestCase):
                     provider.client.responses.create.side_effect = [
                         openai_reply(function_call()), llm.ResponseError("offline"), openai_reply(),
                     ]
-                else:
+                elif name == "claude":
                     call = SimpleNamespace(type="tool_use", id="call_1", name="list_folder", input={})
                     provider.client.messages.create.side_effect = [
                         SimpleNamespace(content=[call], stop_reason="tool_use"),
                         llm.ResponseError("offline"),
                         SimpleNamespace(content=[], stop_reason="end_turn"),
+                    ]
+                elif name == "lmstudio":
+                    answer = SimpleNamespace(
+                        choices=[SimpleNamespace(
+                            message=chat_message(tool_calls=[chat_tool_call()]),
+                            finish_reason="tool_calls",
+                        )]
+                    )
+                    final = SimpleNamespace(choices=[SimpleNamespace(
+                        message=chat_message(), finish_reason="stop",
+                    )])
+                    provider.client.chat.completions.create.side_effect = [
+                        answer, llm.ResponseError("offline"), final,
                     ]
                 function = Mock(return_value="files")
                 with patch.object(llm, "create_provider", return_value=provider), \
